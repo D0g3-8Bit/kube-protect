@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-deployment     
+  namespace: default
+spec:
+  replicas: 1           
+  selector:
+    matchLabels:
+      app: k8sgo
+  template:
+    metadata:
+      labels:
+        app: k8sgo
+    spec:
+      serviceAccountName: test-python-app-sa 
+      containers:
+      - name: k8sgo         
+        image: uu2fu3o/k8s:002 
+      tolerations:
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
