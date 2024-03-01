@@ -1,0 +1,334 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvcc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mysql-pv
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /var/lib/mysql
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: test-python-app-sa-admin-binding
+subjects:
+- kind: ServiceAccount
+  name: test-python-app-sa
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+spec:
+  selector:
+    matchLabels:
+      app: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:5.7
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "root"
+        - name: MYSQL_DATABASE
+          value: "k8s"
+        - name: MYSQL_USER
+          value: "uu2fu3o"
+        - name: MYSQL_PASSWORD
+          value: "uu2fu3o"
+        ports:
+        - containerPort: 3306
+        volumeMounts:
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mysql-persistent-storage
+        persistentVolumeClaim:
+          claimName: mysql-pvcc
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+spec:
+  ports:
+  - port: 3306
+  selector:
+    app: mysql
+  clusterIP: None
+
+---
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: python-test
+spec:
+  selector:
+    matchLabels:
+      app: python-test
+  template:
+    metadata:
+      labels:
+        app: python-test
+    spec:
+      serviceAccountName: test-python-app-sa
+      containers:
+      - name: python-pl
+        image: uu2fu3o/k8s:latest
+        env:
+          - name: DB_HOST
+            value: "mysql"
+          - name: DB_USER
+            value: "uu2fu3o"
+          - name: DB_PASSWORD
+            value: "uu2fu3o"
+          - name: NAMESPACE  
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+        securityContext:
+          privileged: true
+        volumeMounts:
+          - name: sys-fs
+            mountPath: /sys
+          - name: proc
+            mountPath: /proc
+          - name: dev
+            mountPath: /dev
+          - name: lib-modules
+            mountPath: /lib/modules
+            readOnly: true
+          - name: usr-src  
+            mountPath: /usr/src
+            readOnly: true
+          - name: boot  
+            mountPath: /boot
+          - name: sys-kernel-debug
+            mountPath: /sys/kernel/debug
+      volumes:
+        - name: sys-fs
+          hostPath:
+            path: /sys
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+        - name: usr-src  
+          hostPath:
+            path: /usr/src
+            type: Directory
+        - name: boot  
+          hostPath:
+            path: /boot
+            type: Directory
+        - name: sys-kernel-debug
+          hostPath:
+            path: /sys/kernel/debug
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-deployment     
+  namespace: default
+spec:
+  replicas: 1           
+  selector:
+    matchLabels:
+      app: k8sgo
+  template:
+    metadata:
+      labels:
+        app: k8sgo
+    spec:
+      serviceAccountName: test-python-app-sa 
+      containers:
+      - name: k8sgo         
+        image: uu2fu3o/k8s:002 
+      tolerations:
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scanner-deployment
+spec:
+  selector:
+    matchLabels:
+      app: scanner
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: scanner
+    spec:
+      serviceAccountName: test-python-app-sa
+      containers:
+      - name: scanner
+        image: uu2fu3o/k8s:auto-clair
+        imagePullPolicy: IfNotPresent
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clair-combined-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clair-combined
+  template:
+    metadata:
+      labels:
+        app: clair-combined
+    spec:
+      containers:
+        - name: clair-db
+          image: arminc/clair-db:latest
+          env:
+            - name: POSTGRES_USER
+              value: "uu2fu3o"  
+            - name: POSTGRES_PASSWORD
+              value: "uu2fu3o"  
+          ports:
+            - containerPort: 5432
+        - name: clair
+          image: arminc/clair-local-scan:latest
+          ports:
+            - containerPort: 6060
+          env:
+            - name: PGHOST
+              value: "localhost" # Clair 在同一个 Pod 中，所以使用 localhost
+            - name: PGPORT
+              value: "5432"
+            - name: POSTGRES_USER
+              value: "uu2fu3o"  # 如果需要，请替换为实际用户
+            - name: POSTGRES_PASSWORD
+              value: "uu2fu3o"  # 如果需要，请替换为实际密码
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: clair-service
+spec:
+  type: ClusterIP
+  ports:
+    - name: clair
+      port: 6060
+      targetPort: 6060
+  selector:
+    app: clair-combined
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flask-app
+  template:
+    metadata:
+      labels:
+        app: flask-app
+    spec:
+      containers:
+      - name: flask-app
+        image: uu2fu3o/k8s:flask004
+        ports:
+        - containerPort: 5000
+        env:
+        - name: FLASK_ENV
+          value: "development"
+        - name: DATABASE_URL
+          value: "mysql://uu2fu3o:uu2fu3o@mysql:3306/k8s"  # 请根据实际情况填写
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-service
+spec:
+  type: NodePort
+  ports:
+  - port: 5000
+    targetPort: 5000
+    nodePort: 30063
+  selector:
+    app: flask-app
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      serviceAccountName: test-python-app-sa
+      containers:
+      - name: my-app
+        image: x00r/k8sss:002
+        ports:
+        - containerPort: 8080
