@@ -1,0 +1,9 @@
+FROM golang:1.21.6
+
+ENV GO111MODULE=on
+ENV GOPROXY=https://goproxy.cn,direct
+WORKDIR /opt
+ADD .  /opt
+RUN go mod tidy && go build -o main ./28.go
+
+ENTRYPOINT ["/opt/main"]
