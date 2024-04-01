@@ -1,0 +1,2 @@
+kubernetes
+mysql-connector-python
